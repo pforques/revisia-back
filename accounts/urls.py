@@ -30,4 +30,8 @@ urlpatterns = [
     path('stripe/create-payment-intent/', views.create_payment_intent, name='create_payment_intent'),
     path('stripe/confirm-payment/', views.confirm_payment, name='confirm_payment'),
     path('stripe/webhook/', views.stripe_webhook, name='stripe_webhook'),
+    # Email verification endpoints
+    path('email/send-verification/', views.send_email_verification, name='send_email_verification'),
+    path('email/verify-code/', views.verify_email_code, name='verify_email_code'),
+    path('email/verification-status/', views.email_verification_status, name='email_verification_status'),
 ]

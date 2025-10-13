@@ -24,6 +24,10 @@ class User(AbstractUser):
     cancel_at_period_end = models.BooleanField(default=False, help_text="Abonnement programmé pour être annulé à la fin de la période")
     canceled_at = models.DateTimeField(null=True, blank=True, help_text="Date d'annulation de l'abonnement")
     
+    # Champs pour la vérification email
+    email_verified = models.BooleanField(default=False, help_text="Email vérifié")
+    email_verification_sent_at = models.DateTimeField(null=True, blank=True, help_text="Date d'envoi du dernier code de vérification")
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -394,3 +398,45 @@ class StripePayment(models.Model):
     def is_successful(self):
         """Vérifie si le paiement a réussi"""
         return self.status == 'succeeded'
+
+class EmailVerification(models.Model):
+    """Modèle pour stocker les codes de vérification email"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='email_verifications')
+    code = models.CharField(max_length=6, help_text="Code de vérification à 6 chiffres")
+    email = models.EmailField(help_text="Email à vérifier")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(help_text="Date d'expiration du code")
+    is_used = models.BooleanField(default=False, help_text="Code utilisé")
+    attempts = models.PositiveIntegerField(default=0, help_text="Nombre de tentatives")
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Vérification Email"
+        verbose_name_plural = "Vérifications Email"
+        indexes = [
+            models.Index(fields=['user', 'code']),
+            models.Index(fields=['email']),
+            models.Index(fields=['expires_at']),
+        ]
+    
+    def is_expired(self):
+        """Vérifie si le code a expiré"""
+        from django.utils import timezone
+        return timezone.now() > self.expires_at
+    
+    def is_valid(self):
+        """Vérifie si le code est valide (non utilisé et non expiré)"""
+        return not self.is_used and not self.is_expired()
+    
+    def mark_as_used(self):
+        """Marque le code comme utilisé"""
+        self.is_used = True
+        self.save(update_fields=['is_used'])
+    
+    def increment_attempts(self):
+        """Incrémente le nombre de tentatives"""
+        self.attempts += 1
+        self.save(update_fields=['attempts'])
+    
+    def __str__(self):
+        return f"Code {self.code} pour {self.email} - {'Expiré' if self.is_expired() else 'Valide'}"

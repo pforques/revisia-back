@@ -58,7 +58,6 @@ class OpenAIService:
                 '.json': 'application/json',
                 '.csv': 'text/csv',
                 '.xml': 'application/xml',
-                '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                 '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
                 '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             }
@@ -136,7 +135,7 @@ Réponds UNIQUEMENT avec le JSON, sans texte supplémentaire.
             ]
             
             # Ajouter le fichier selon son type
-            if file_extension in ['.pdf', '.txt', '.md', '.json', '.csv', '.xml', '.docx', '.pptx', '.xlsx']:
+            if file_extension in ['.pdf', '.txt', '.md', '.json', '.csv', '.xml', '.pptx', '.xlsx']:
                 # Pour les documents, utiliser le type "file"
                 logger.info(f"📄 Ajout du document de type: {mime_type}")
                 message_content.append({
@@ -328,6 +327,167 @@ Réponds UNIQUEMENT avec le JSON, sans texte supplémentaire.
         
         return education_contexts.get(education_level, f"Niveau: {education_level} - Adapte le contenu à ce niveau spécifique.")
     
+    def generate_lesson_title(self, file_path, document_title, education_level=''):
+        """
+        Génère un titre de leçon intelligent basé sur le contenu du document
+        """
+        try:
+            import base64
+            
+            logger.info(f"🎯 Génération du titre de leçon pour: {document_title}")
+            logger.info(f"📁 Chemin du fichier: {file_path}")
+            
+            # Vérifier la clé API
+            if not settings.OPENAI_API_KEY:
+                logger.error("❌ Clé API OpenAI manquante dans les paramètres")
+                raise Exception("Configuration OpenAI manquante")
+            
+            # Construire le contexte éducatif
+            education_context = self._build_education_context(education_level)
+            
+            # Lire le fichier et l'encoder en base64
+            logger.info(f"📖 Lecture du fichier pour génération du titre: {file_path}")
+            with open(file_path, 'rb') as f:
+                file_data = f.read()
+                file_base64 = base64.b64encode(file_data).decode('utf-8')
+            
+            # Déterminer le type MIME du fichier
+            file_extension = os.path.splitext(file_path)[1].lower()
+            mime_types = {
+                '.pdf': 'application/pdf',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp',
+                '.txt': 'text/plain',
+                '.md': 'text/markdown',
+                '.json': 'application/json',
+                '.csv': 'text/csv',
+                '.xml': 'application/xml',
+                '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            }
+            
+            mime_type = mime_types.get(file_extension, 'application/octet-stream')
+            
+            # Prompt pour générer un titre de leçon
+            prompt = f"""
+Tu es un expert en pédagogie et en didactique. Analyse le document suivant et génère un titre de leçon intelligent et descriptif qui reflète le contenu principal du document.
+
+Titre actuel du document: {document_title}
+
+{education_context}
+
+Instructions pour le titre:
+- Le titre doit être clair, concis et informatif (maximum 60 caractères)
+- Il doit refléter le sujet principal ou le thème central du document
+- Utilise un vocabulaire adapté au niveau d'éducation
+- Évite les termes techniques trop complexes si le niveau est basique
+- Le titre doit être attractif et donner envie d'apprendre
+- Si le document traite de plusieurs sujets, choisis le plus important
+- Utilise des termes pédagogiques appropriés (ex: "Introduction à...", "Les bases de...", "Comprendre...")
+
+Exemples de bons titres:
+- "Introduction aux équations du second degré"
+- "Les bases de la géométrie euclidienne"
+- "Comprendre la photosynthèse"
+- "Histoire de la Révolution française"
+- "Les principes de la mécanique quantique"
+
+Format de réponse: JSON avec la structure suivante:
+{{
+    "lesson_title": "Titre intelligent et descriptif de la leçon",
+    "subject": "Matière principale identifiée",
+    "keywords": ["mot-clé1", "mot-clé2", "mot-clé3"]
+}}
+
+Réponds UNIQUEMENT avec le JSON, sans texte supplémentaire.
+"""
+
+            # Uploader le fichier d'abord
+            logger.info(f"📤 Upload du fichier pour génération du titre...")
+            uploaded_file = self.client.files.create(
+                file=open(file_path, 'rb'),
+                purpose='assistants'
+            )
+            logger.info(f"✅ Fichier uploadé avec l'ID: {uploaded_file.id}")
+            
+            # Construire le message avec le fichier
+            message_content = [
+                {"type": "text", "text": prompt}
+            ]
+            
+            # Ajouter le fichier selon son type
+            if file_extension in ['.pdf', '.txt', '.md', '.json', '.csv', '.xml', '.pptx', '.xlsx']:
+                message_content.append({
+                    "type": "file",
+                    "file": {
+                        "file_id": uploaded_file.id
+                    }
+                })
+            else:
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{file_base64}"
+                    }
+                })
+
+            logger.info(f"🤖 Envoi de la requête pour génération du titre...")
+            
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Tu es un expert en pédagogie et en création de titres éducatifs. Tu analyses des documents et génères des titres de leçons clairs, attractifs et pédagogiquement pertinents. IMPORTANT: Tu dois toujours retourner un JSON valide avec le titre généré."},
+                    {"role": "user", "content": message_content}
+                ],
+                max_tokens=200,
+                temperature=0.7
+            )
+            
+            logger.info(f"✅ Réponse reçue pour le titre")
+            
+            # Extraire le contenu de la réponse
+            content = response.choices[0].message.content.strip()
+            logger.info(f"📄 Contenu brut reçu: {content}")
+            
+            # Nettoyer le contenu (enlever les markdown si présent)
+            if content.startswith('```json'):
+                content = content[7:]
+            if content.endswith('```'):
+                content = content[:-3]
+            if content.startswith('```'):
+                content = content[3:]
+            
+            content = content.strip()
+            
+            # Parser le JSON
+            try:
+                title_data = json.loads(content)
+            except json.JSONDecodeError as json_error:
+                logger.error(f"❌ Erreur de parsing JSON pour le titre: {json_error}")
+                # Fallback: utiliser le titre du document
+                return document_title
+            
+            # Nettoyer le fichier uploadé
+            try:
+                self.client.files.delete(uploaded_file.id)
+                logger.info(f"🗑️ Fichier temporaire supprimé: {uploaded_file.id}")
+            except Exception as cleanup_error:
+                logger.warning(f"⚠️ Impossible de supprimer le fichier temporaire: {cleanup_error}")
+            
+            # Extraire le titre généré
+            generated_title = title_data.get('lesson_title', document_title)
+            logger.info(f"🎯 Titre généré: '{generated_title}'")
+            
+            return generated_title
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la génération du titre: {e}")
+            # En cas d'erreur, retourner le titre du document
+            return document_title
+
     def _get_fallback_questions(self, document_title, question_count, difficulty):
         """
         Questions de secours en cas d'erreur avec l'API

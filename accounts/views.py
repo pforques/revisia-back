@@ -15,7 +15,7 @@ import uuid
 import logging
 import stripe
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 # UserSerializer removed - using manual serialization
 
 logger = logging.getLogger(__name__)
@@ -24,8 +24,9 @@ from .serializers import (
     DocumentSerializer, QuestionSerializer, LessonSerializer, 
     UserAnswerSerializer, LessonStatsSerializer, LessonAttemptSerializer
 )
-from .models import User, Document, Question, Answer, Lesson, UserAnswer, LessonAttempt, GuestSession, StripePayment
+from .models import User, Document, Question, Answer, Lesson, UserAnswer, LessonAttempt, GuestSession, StripePayment, EmailVerification
 from ai_service import OpenAIService
+from email_service import email_service
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -33,6 +34,39 @@ def register(request):
     serializer = UserRegistrationSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.save()
+        
+        # Envoyer automatiquement le code de vérification après inscription
+        verification_code = email_service.generate_verification_code()
+        expires_at = timezone.now() + timedelta(minutes=15)
+        
+        # Print le code dans la console pour les tests
+        print(f"🔢 Code de vérification pour {user.email}: {verification_code}")
+        
+        # Créer l'enregistrement de vérification
+        verification = EmailVerification.objects.create(
+            user=user,
+            code=verification_code,
+            email=user.email,
+            expires_at=expires_at
+        )
+        
+        # Envoyer l'email de vérification
+        email_sent = email_service.send_verification_email(user.email, verification_code)
+        
+        # Envoyer la notification admin
+        user_name = f"{user.first_name} {user.last_name}".strip()
+        admin_notification_sent = email_service.send_new_user_notification(
+            user.email, 
+            user_name, 
+            user.username
+        )
+        
+        if email_sent:
+            # Mettre à jour la date d'envoi
+            user.email_verification_sent_at = timezone.now()
+            user.save(update_fields=['email_verification_sent_at'])
+        
+        # Générer les tokens mais marquer l'utilisateur comme non vérifié
         refresh = RefreshToken.for_user(user)
         return Response({
             'user': {
@@ -42,11 +76,14 @@ def register(request):
                 'first_name': user.first_name,
                 'last_name': user.last_name,
                 'is_premium': user.is_premium,
+                'email_verified': user.email_verified,
             },
             'tokens': {
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
-            }
+            },
+            'email_verification_sent': email_sent,
+            'message': 'Compte créé avec succès. Vérifiez votre email pour activer votre compte.'
         }, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -85,6 +122,7 @@ def profile(request):
         'last_name': user.last_name,
         'is_premium': user.is_premium,
         'education_level': user.education_level,
+        'email_verified': user.email_verified,
         'date_joined': user.date_joined,
     })
 
@@ -489,11 +527,25 @@ def upload_document(request):
             'details': 'Erreur lors de la génération des questions. Veuillez réessayer.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    # Créer automatiquement une leçon
+    # Générer un titre intelligent pour la leçon avec l'IA
+    try:
+        from ai_service import OpenAIService
+        ai_service = OpenAIService()
+        intelligent_title = ai_service.generate_lesson_title(
+            file_path=document.file.path,
+            document_title=title,
+            education_level=education_level
+        )
+        logger.info(f"🎯 Titre intelligent généré: '{intelligent_title}'")
+    except Exception as e:
+        logger.warning(f"⚠️ Erreur lors de la génération du titre intelligent: {e}")
+        intelligent_title = title  # Fallback vers le titre original
+    
+    # Créer automatiquement une leçon avec le titre intelligent
     lesson = Lesson.objects.create(
         user=document_user,
         document=document,
-        title=title,
+        title=intelligent_title,
         difficulty='medium'
     )
     
@@ -518,6 +570,7 @@ def upload_document(request):
         'document_id': document.id,
         'lesson_id': lesson.id,
         'title': document.title,
+        'lesson_title': intelligent_title,
         'questions_count': questions.count(),
         'message': 'Document uploadé et questions générées avec succès'
     }
@@ -1652,4 +1705,184 @@ def delete_question(request, lesson_id, question_id):
         return Response({'error': 'Question non trouvée'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+# ==================== ENDPOINTS DE VÉRIFICATION EMAIL ====================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def send_email_verification(request):
+    """Envoie un code de vérification à l'email de l'utilisateur"""
+    try:
+        user = request.user
+        
+        # Vérifier si l'email est déjà vérifié
+        if user.email_verified:
+            return Response({
+                'message': 'Email déjà vérifié',
+                'email_verified': True
+            }, status=status.HTTP_200_OK)
+        
+        # Vérifier le délai entre les envois (minimum 1 minute)
+        if user.email_verification_sent_at:
+            time_since_last = timezone.now() - user.email_verification_sent_at
+            if time_since_last.total_seconds() < 60:
+                remaining_seconds = 60 - int(time_since_last.total_seconds())
+                return Response({
+                    'error': f'Veuillez attendre {remaining_seconds} secondes avant de redemander un code'
+                }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        
+        # Générer un nouveau code de vérification
+        verification_code = email_service.generate_verification_code()
+        expires_at = timezone.now() + timedelta(minutes=15)
+        
+        # Print le code dans la console pour les tests
+        print(f"🔢 Code de vérification pour {user.email}: {verification_code}")
+        
+        # Créer l'enregistrement de vérification
+        verification = EmailVerification.objects.create(
+            user=user,
+            code=verification_code,
+            email=user.email,
+            expires_at=expires_at
+        )
+        
+        # Envoyer l'email
+        email_sent = email_service.send_verification_email(user.email, verification_code)
+        
+        if email_sent:
+            # Mettre à jour la date d'envoi
+            user.email_verification_sent_at = timezone.now()
+            user.save(update_fields=['email_verification_sent_at'])
+            
+            return Response({
+                'message': 'Code de vérification envoyé avec succès',
+                'email': user.email,
+                'expires_in_minutes': 15
+            }, status=status.HTTP_200_OK)
+        else:
+            # Supprimer l'enregistrement si l'email n'a pas pu être envoyé
+            verification.delete()
+            return Response({
+                'error': 'Erreur lors de l\'envoi de l\'email'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+    except Exception as e:
+        logger.error(f"Erreur lors de l'envoi de la vérification email: {str(e)}")
+        return Response({
+            'error': 'Erreur interne du serveur'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_email_code(request):
+    """Vérifie le code de vérification email"""
+    try:
+        user = request.user
+        code = request.data.get('code', '').strip()
+        
+        if not code:
+            return Response({
+                'error': 'Code de vérification requis'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Vérifier si l'email est déjà vérifié
+        if user.email_verified:
+            return Response({
+                'message': 'Email déjà vérifié',
+                'email_verified': True
+            }, status=status.HTTP_200_OK)
+        
+        # Chercher le code de vérification valide
+        try:
+            verification = EmailVerification.objects.filter(
+                user=user,
+                code=code,
+                is_used=False
+            ).order_by('-created_at').first()
+            
+            if not verification:
+                return Response({
+                    'error': 'Code de vérification invalide'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Vérifier si le code a expiré
+            if verification.is_expired():
+                verification.increment_attempts()
+                return Response({
+                    'error': 'Code de vérification expiré'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Vérifier le nombre de tentatives
+            if verification.attempts >= 3:
+                return Response({
+                    'error': 'Trop de tentatives. Veuillez demander un nouveau code'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Marquer le code comme utilisé
+            verification.mark_as_used()
+            
+            # Marquer l'email comme vérifié
+            user.email_verified = True
+            user.save(update_fields=['email_verified'])
+            
+            # Envoyer un email de bienvenue
+            email_service.send_welcome_email(user.email, user.first_name or user.username)
+            
+            return Response({
+                'message': 'Email vérifié avec succès',
+                'email_verified': True
+            }, status=status.HTTP_200_OK)
+            
+        except EmailVerification.DoesNotExist:
+            return Response({
+                'error': 'Code de vérification invalide'
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        logger.error(f"Erreur lors de la vérification du code email: {str(e)}")
+        return Response({
+            'error': 'Erreur interne du serveur'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def email_verification_status(request):
+    """Retourne le statut de vérification de l'email"""
+    try:
+        user = request.user
+        
+        # Chercher le dernier code de vérification
+        last_verification = EmailVerification.objects.filter(
+            user=user
+        ).order_by('-created_at').first()
+        
+        response_data = {
+            'email_verified': user.email_verified,
+            'email': user.email,
+            'can_request_new_code': True
+        }
+        
+        if last_verification and not user.email_verified:
+            # Vérifier si on peut demander un nouveau code
+            if user.email_verification_sent_at:
+                time_since_last = timezone.now() - user.email_verification_sent_at
+                can_request = time_since_last.total_seconds() >= 60
+                response_data['can_request_new_code'] = can_request
+                
+                if not can_request:
+                    remaining_seconds = 60 - int(time_since_last.total_seconds())
+                    response_data['next_code_in_seconds'] = remaining_seconds
+            
+            # Ajouter des infos sur le dernier code
+            response_data['last_code_expires_at'] = last_verification.expires_at.isoformat()
+            response_data['last_code_is_expired'] = last_verification.is_expired()
+            response_data['last_code_attempts'] = last_verification.attempts
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération du statut de vérification: {str(e)}")
+        return Response({
+            'error': 'Erreur interne du serveur'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

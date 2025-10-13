@@ -11,3 +11,4 @@ psycopg[binary]
 gunicorn
 whitenoise
 stripe
+django-anymail==10.2

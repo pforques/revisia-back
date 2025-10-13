@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
+    'anymail',
     'accounts',
 ]
 
@@ -57,6 +58,8 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'accounts.middleware.EmailVerificationMiddleware',
+    'accounts.middleware.FrontendEmailVerificationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -181,3 +184,15 @@ STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
 # Stripe Price IDs pour les abonnements
 STRIPE_PRICE_MONTHLY = os.environ.get('STRIPE_PRICE_MONTHLY', 'price_1SEWOrDrRzoIRADbmlBpSSRg')
 STRIPE_PRICE_YEARLY = os.environ.get('STRIPE_PRICE_YEARLY', 'price_1SEWPXDrRzoIRADbbsqZ3XkH')
+
+# Email Configuration avec AnyMail et Mailgun
+EMAIL_BACKEND = 'anymail.backends.mailgun.EmailBackend'
+
+ANYMAIL = {
+    'MAILGUN_API_KEY': os.environ.get('MAILGUN_API_KEY'),
+    'MAILGUN_SENDER_DOMAIN': os.environ.get('MAILGUN_DOMAIN'),
+    'MAILGUN_API_URL': os.environ.get('MAILGUN_API_URL', 'https://api.mailgun.net/v3'),
+}
+
+DEFAULT_FROM_EMAIL = os.environ.get('MAILGUN_FROM_EMAIL', 'noreply@mail.revisia-app.fr')
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
