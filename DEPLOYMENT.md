@@ -44,6 +44,33 @@ Après déploiement, vérifier que :
 - Les fichiers statiques sont servis correctement
 - Les URLs `/static/` fonctionnent
 
+## Rapport hebdo métriques (dimanche)
+
+Commande ajoutée :
+
+```bash
+python manage.py send_weekly_metrics_report
+```
+
+Variables d'environnement :
+
+```bash
+WEEKLY_METRICS_REPORT_TO=ton-email@domaine.com
+MAILGUN_FROM_EMAIL=noreply@mail.revisia-app.fr
+```
+
+Test manuel (sans envoi) :
+
+```bash
+python manage.py send_weekly_metrics_report --dry-run
+```
+
+Planification recommandée (chaque dimanche 09:00 UTC) :
+
+```cron
+0 9 * * 0 cd /path/to/revisia-back && /path/to/python manage.py send_weekly_metrics_report
+```
+
 ### Résolution des erreurs de déploiement
 
 #### Erreur "undefined variable 'pip'"
