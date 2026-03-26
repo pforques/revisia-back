@@ -3,6 +3,8 @@ from django.contrib.auth.models import AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
 
 class User(AbstractUser):
+    SPECIAL_PREMIUM_EMAILS = {"uwu@uwu.com"}
+
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
@@ -34,18 +36,14 @@ class User(AbstractUser):
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username', 'first_name', 'last_name']
     
+    def has_premium_access(self):
+        email = (self.email or "").strip().lower()
+        return self.is_premium or email in self.SPECIAL_PREMIUM_EMAILS
+
     def get_user_role(self):
         """Retourne le rôle de l'utilisateur"""
-        if self.is_premium:
-            # Si l'utilisateur est premium ET a un abonnement Stripe actif
-            if self.stripe_subscription_id and self.is_subscription_active():
-                return 'premium'
-            # Si l'utilisateur est premium mais sans abonnement Stripe (premium manuel)
-            elif not self.stripe_subscription_id:
-                return 'premium'
-            # Si l'utilisateur est premium mais l'abonnement Stripe n'est pas actif
-            else:
-                return 'premium'  # Garder premium même si l'abonnement Stripe est inactif
+        if self.has_premium_access():
+            return 'premium'
         elif self.is_authenticated:
             return 'free'
         else:
@@ -113,67 +111,26 @@ class User(AbstractUser):
         self.save()
     
     def can_create_quiz_today(self):
-        """Vérifie si l'utilisateur peut créer un quiz aujourd'hui"""
-        from django.utils import timezone
-        
-        today = timezone.now().date()
-        
-        # Reset du compteur si ce n'est pas le même jour
-        if self.last_quiz_date != today:
-            self.quiz_count_today = 0
-            self.last_quiz_date = today
-            self.save(update_fields=['quiz_count_today', 'last_quiz_date'])
-        
-        if self.is_premium:
+        """Compat: quota global non premium (1 génération au total)."""
+        if self.has_premium_access():
             return True
-        else:
-            return self.quiz_count_today < 1
+        return self.quiz_count_today < 1
     
     def increment_quiz_count(self):
-        """Incrémente le compteur de quiz du jour"""
-        from django.utils import timezone
-        
-        today = timezone.now().date()
-        
-        if self.last_quiz_date != today:
-            self.quiz_count_today = 1
-            self.last_quiz_date = today
-        else:
-            self.quiz_count_today += 1
-        
-        self.save(update_fields=['quiz_count_today', 'last_quiz_date'])
+        """Incrémente le compteur de générations (quota global non premium)."""
+        self.quiz_count_today += 1
+        self.save(update_fields=['quiz_count_today'])
     
     def can_attempt_quiz_today(self):
-        """Vérifie si l'utilisateur peut faire une tentative de quiz aujourd'hui"""
-        from django.utils import timezone
-        
-        today = timezone.now().date()
-        
-        # Reset du compteur si ce n'est pas le même jour
-        if self.last_attempt_date != today:
-            self.attempts_count_today = 0
-            self.last_attempt_date = today
-            self.save(update_fields=['attempts_count_today', 'last_attempt_date'])
-        
-        if self.is_premium:
+        """Compat: quota global non premium (2 tentatives au total)."""
+        if self.has_premium_access():
             return True
-        else:
-            return self.attempts_count_today < 2
+        return self.attempts_count_today < 2
     
     def increment_attempt_count(self):
-        """Incrémente le compteur de tentatives du jour"""
-        from django.utils import timezone
-        
-        today = timezone.now().date()
-        
-        # Reset du compteur si ce n'est pas le même jour
-        if self.last_attempt_date != today:
-            self.attempts_count_today = 1
-            self.last_attempt_date = today
-        else:
-            self.attempts_count_today += 1
-        
-        self.save(update_fields=['attempts_count_today', 'last_attempt_date'])
+        """Incrémente le compteur de tentatives (quota global non premium)."""
+        self.attempts_count_today += 1
+        self.save(update_fields=['attempts_count_today'])
 
 class Document(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='documents', null=True, blank=True, help_text="Utilisateur propriétaire du document (null pour les invités)")
