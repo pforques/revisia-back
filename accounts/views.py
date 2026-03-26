@@ -28,21 +28,13 @@ from .models import User, Document, Question, Answer, Lesson, UserAnswer, Lesson
 from ai_service import OpenAIService
 from email_service import email_service
 
-
-def ensure_special_premium(user: User):
-    if user and (user.email or '').strip().lower() == 'uwu@uwu.com' and not user.is_premium:
-        user.is_premium = True
-        user.save(update_fields=['is_premium'])
-
-
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
     serializer = UserRegistrationSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.save()
-        ensure_special_premium(user)
-
+        
         # Envoyer automatiquement le code de vérification après inscription
         verification_code = email_service.generate_verification_code()
         expires_at = timezone.now() + timedelta(minutes=15)
@@ -101,7 +93,6 @@ def login(request):
     serializer = UserLoginSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.validated_data['user']
-        ensure_special_premium(user)
         refresh = RefreshToken.for_user(user)
         return Response({
             'user': {
@@ -123,7 +114,6 @@ def login(request):
 @permission_classes([IsAuthenticated])
 def profile(request):
     user = request.user
-    ensure_special_premium(user)
     return Response({
         'id': user.id,
         'email': user.email,
@@ -504,11 +494,11 @@ def upload_document(request):
     if user and not user.can_create_quiz_today():
         if user_role == 'free':
             return Response({
-                'error': 'Limite atteinte. Les comptes non premium sont limités à 1 génération au total.',
+                'error': 'Limite de quiz quotidienne atteinte. Vous avez utilisé votre quota gratuit du jour.',
                 'details': 'Passez à Premium pour un accès illimité et débloquer toutes les fonctionnalités.'
             }, status=status.HTTP_403_FORBIDDEN)
         else:
-            return Response({'error': 'Limite atteinte. Passez à Premium pour un accès illimité.'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({'error': 'Limite de quiz quotidienne atteinte. Passez à Premium pour un accès illimité.'}, status=status.HTTP_403_FORBIDDEN)
     
     # Sauvegarder le fichier
     file_extension = os.path.splitext(file.name)[1]
@@ -848,7 +838,7 @@ def get_lesson(request, lesson_id):
             if not request.user.is_premium:
                 if not request.user.can_attempt_quiz_today():
                     return Response({
-                        'error': 'Limite atteinte. Les comptes non premium sont limités à 2 tentatives au total.',
+                        'error': 'Limite de tentatives quotidienne atteinte. Vous avez utilisé vos 2 tentatives gratuites du jour.',
                         'details': 'Passez à Premium pour un accès illimité et débloquer toutes les fonctionnalités.'
                     }, status=status.HTTP_403_FORBIDDEN)
                 
